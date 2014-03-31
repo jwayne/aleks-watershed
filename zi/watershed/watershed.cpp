@@ -841,33 +841,20 @@ Output:
 
 std::size_t limit_fn_avg( float v )
 {
-    // size threshold based on affinity
-    if ( v > 1 )
-        printf("Bad v: %f", v);
-        return 2000;
-
     if ( v < 0.5 )
         return 25;
-
     /* XXX: Uh.. this isn't smooth? */
     v *= 7;
-
     return static_cast<std::size_t>(v*v*v*v);
 }
 
 std::size_t limit_fn_bup( float v )
 {
     // size threshold based on affinity
-    if ( v > 1 )
-        printf("Bad v: %f", v);
-        return 2000;
-
     if ( v < 0.5 )
         return 25;
-
     /* XXX: Uh.. this isn't smooth? */
     v *= 4;
-
     return static_cast<std::size_t>(v*v*v*v*v);
 }
 

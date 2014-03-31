@@ -1,3 +1,6 @@
+aleks-watershed
+========
+
 Segment a 3D affinity graph using various modified watershed algorithms.  Code thanks to Aleks Zletaski of MIT, my work has been to prepare watershed for simpler compilation/execution.
 
 # Getting Started
