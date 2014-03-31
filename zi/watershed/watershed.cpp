@@ -21,7 +21,6 @@ Code implementing the T_s threshold discussed in Aleks's master's thesis is
 included, but is commented out, having been replaced by types 1-2.
 
 Code by Aleksander Zlateski
-Comments by Josh Chen
 */
 
 #include <boost/multi_array.hpp>
@@ -29,6 +28,7 @@ Comments by Josh Chen
 #include <memory>
 #include <type_traits>
 
+#include <stdio.h>
 #include <iostream>
 #include <fstream>
 #include <cstdio>
@@ -119,6 +119,8 @@ inline bool
 write_volume_to_file( const std::string& fname,
                       const volume_ptr<T>& vol )
 {
+    /* Write labels to a file. */
+
     std::ofstream f(fname.c_str(), (std::ios::out | std::ios::binary) );
 
     if ( !f )
@@ -139,6 +141,210 @@ template< typename ID, typename F >
 using region_graph_ptr = std::shared_ptr<region_graph<ID,F>>;
 
 
+template< typename ID, typename F, typename L, typename H >
+inline std::pair<volume_ptr<ID>, ID>
+simple_watershed( const affinity_graph_ptr<F>& aff_ptr,
+                  const L& lowv,
+                  const H& highv,
+                  std::vector<std::size_t>& counts )
+{
+    /*
+    Perform watershed as defined by Algorithm 1 in Cousty 2009.
+
+    Input:
+      aff_ptr = affinity graph of edge weights
+      lowv = T_l
+      highv = T_h
+      counts = empty.  will fill with size of each segment
+    Output:
+      pair (vertex labels--z*y*x float, # labels)
+      Note that `counts` is also updated.
+    */
+
+    typedef F float_type;
+    typedef watershed_traits<ID> traits;
+
+    float_type low  = static_cast<float_type>(lowv);
+    float_type high = static_cast<float_type>(highv);
+
+    std::ptrdiff_t xdim = aff_ptr->shape()[0];
+    std::ptrdiff_t ydim = aff_ptr->shape()[1];
+    std::ptrdiff_t zdim = aff_ptr->shape()[2];
+
+    std::ptrdiff_t size = xdim * ydim * zdim;
+
+    volume_ptr<ID> seg_ptr( new volume<ID>(boost::extents[xdim][ydim][zdim],
+                                           boost::fortran_storage_order()));
+    affinity_graph<F>& aff = *aff_ptr;
+    volume<ID>&        seg = *seg_ptr;
+
+    ID* seg_raw = seg_ptr->data();
+
+    // for each vertex, find which direction the stream is going
+    for ( std::ptrdiff_t z = 0; z < zdim; ++z )
+        for ( std::ptrdiff_t y = 0; y < ydim; ++y )
+            for ( std::ptrdiff_t x = 0; x < xdim; ++x )
+            {
+                ID& id = seg[x][y][z] = 0;
+
+                F negx = (x>0) ? aff[x][y][z][0] : low;
+                F negy = (y>0) ? aff[x][y][z][1] : low;
+                F negz = (z>0) ? aff[x][y][z][2] : low;
+                F posx = (x<(xdim-1)) ? aff[x+1][y][z][0] : low;
+                F posy = (y<(ydim-1)) ? aff[x][y+1][z][1] : low;
+                F posz = (z<(zdim-1)) ? aff[x][y][z+1][2] : low;
+
+                F m = std::max({negx,negy,negz,posx,posy,posz});
+
+                // Don't follow the edge if it's less than low (T_l)
+                if ( m > low )
+                {
+                    if ( negx == m || negx >= high ) { id |= 0x01; }
+                    if ( negy == m || negy >= high ) { id |= 0x02; }
+                    if ( negz == m || negz >= high ) { id |= 0x04; }
+                    if ( posx == m || posx >= high ) { id |= 0x08; }
+                    if ( posy == m || posy >= high ) { id |= 0x10; }
+                    if ( posz == m || posz >= high ) { id |= 0x20; }
+                }
+            }
+
+
+    const std::ptrdiff_t dir[6] = { -1, -xdim, -xdim*ydim, 1, xdim, xdim*ydim };
+    // direction (-x,-y,-z, +x,+y,+z)
+    const ID dirmask[6]  = { 0x01, 0x02, 0x04, 0x08, 0x10, 0x20 };
+    // opposite direction (+x,+y,+z, -x,-y,-z)
+    const ID idirmask[6] = { 0x08, 0x10, 0x20, 0x01, 0x02, 0x04 };
+
+    // get plato escapers
+
+    std::vector<std::ptrdiff_t> bfs;
+
+    // For each vertex, for each direction..
+    for ( std::ptrdiff_t idx = 0; idx < size; ++idx )
+    {
+        for ( std::ptrdiff_t d = 0; d < 6; ++d )
+        {
+            if ( seg_raw[idx] & dirmask[d] )
+            {
+                if ( !(seg_raw[idx+dir[d]] & idirmask[d]) )
+                {
+                    seg_raw[idx] |= 0x40;
+                    bfs.push_back(idx);
+                    d = 6; // break;
+                }
+            }
+        }
+    }
+
+    std::size_t bfs_index = 0;
+
+    while ( bfs_index < bfs.size() )
+    {
+        std::ptrdiff_t idx = bfs[bfs_index];
+
+        ID to_set = 0;
+
+        for ( std::ptrdiff_t d = 0; d < 6; ++d )
+        {
+            if ( seg_raw[idx] & dirmask[d] )
+            {
+                if ( seg_raw[idx+dir[d]] & idirmask[d] )
+                {
+                    if ( !( seg_raw[idx+dir[d]] & 0x40 ) )
+                    {
+                        bfs.push_back(idx+dir[d]);
+                        seg_raw[idx+dir[d]] |= 0x40;
+                    }
+                }
+                else
+                {
+                    to_set = dirmask[d];
+                }
+            }
+        }
+        seg_raw[idx] = to_set;
+        ++bfs_index;
+    }
+
+    bfs.clear();
+
+    //std::vector<std::size_t> counts({0});
+
+    counts.resize(1);
+    counts[0] = 0;
+
+    ID next_id = static_cast<ID>(1);
+
+    for ( std::ptrdiff_t idx = 0; idx < size; ++idx )
+    {
+        if ( seg_raw[idx] == 0 )
+        {
+            seg_raw[idx] |= traits::high_bit;
+            ++counts[0];
+        }
+
+        if ( !( seg_raw[idx] & traits::high_bit ) && seg_raw[idx] )
+        {
+            bfs.push_back(idx);
+            bfs_index = 0;
+            seg_raw[idx] |= 0x40;
+
+            while ( bfs_index < bfs.size() )
+            {
+                std::ptrdiff_t me = bfs[bfs_index];
+
+                for ( std::ptrdiff_t d = 0; d < 6; ++d )
+                {
+                    if ( seg_raw[me] & dirmask[d] )
+                    {
+                        std::ptrdiff_t him = me + dir[d];
+                        if ( seg_raw[him] & traits::high_bit )
+                        {
+                            counts[ seg_raw[him] & ~traits::high_bit ]
+                                += bfs.size();
+
+                            for ( auto& it: bfs )
+                            {
+                                seg_raw[it] = seg_raw[him];
+                            }
+
+                            bfs.clear();
+                            d = 6; // break
+                        }
+                        else if ( !( seg_raw[him] & 0x40 ) )
+                        {
+                            seg_raw[him] |= 0x40;
+                            bfs.push_back( him );
+
+                        }
+                    }
+                }
+                ++bfs_index;
+            }
+
+            if ( bfs.size() )
+            {
+                counts.push_back( bfs.size() );
+                for ( auto& it: bfs )
+                {
+                    seg_raw[it] = traits::high_bit | next_id;
+                }
+                ++next_id;
+                bfs.clear();
+            }
+        }
+    }
+
+    std::cout << "found: " << (next_id-1) << " components\n";
+
+    for ( std::ptrdiff_t idx = 0; idx < size; ++idx )
+    {
+        seg_raw[idx] &= traits::mask;
+    }
+
+    return std::make_pair(seg_ptr, next_id-1);
+}
+
 template< typename ID, typename F >
 inline region_graph_ptr<ID,F>
 get_region_graph( const affinity_graph_ptr<F>& aff_ptr,
@@ -155,7 +361,7 @@ get_region_graph( const affinity_graph_ptr<F>& aff_ptr,
       aff_ptr = affinity graph
       seg_ptr = vertex labels
       max_segid = # labels
-      type = 0 (just_watershed, just_watershed_bup), 1 (just_watershed_avg)
+      type = 1 just_watershed_avg, 2/3 just_watershed_bup/just_watershed
     Output:
       rg_ptr = region graph, which is a decreasingly sorted list of
         (max edge weight, label 1, label 2)
@@ -172,8 +378,8 @@ get_region_graph( const affinity_graph_ptr<F>& aff_ptr,
 
     region_graph<ID,F>& rg = *rg_ptr;
 
-    // just_watershed, just_watershed_bup
-    if (type == 0 || type == 2)
+    // just_watershed_bup, just_watershed
+    if (type >= 2)
     {
         // edges = label-indexed vector, where elements are maps from labels to edge weights
         std::vector<std::map<ID,F>> edges(max_segid+1);
@@ -279,6 +485,10 @@ inline void yet_another_watershed( const volume_ptr<ID>& seg_ptr,
     
     Remark: Merges of groups of >2 segments are made
     when the edges connecting segments in that group have weight > `lowl`.
+
+    Remark: This seems like a duplicate of merge_segments_with_function,
+    except with `func` allowing all merges regardless of size, so long as
+    f > lowl?
 
     Inputs:
       seg_ptr = labels of each vertex
@@ -414,7 +624,7 @@ inline void yet_another_watershed( const volume_ptr<ID>& seg_ptr,
     //
     // Update rg_ptr with new edge weights
 
-    std::ptrdiff_t xdim = seg_ptr->shape()[0];
+    xdim = seg_ptr->shape()[0];
     region_graph<ID,F> new_rg;
 
     for ( auto& it: rg )
@@ -433,7 +643,7 @@ inline void yet_another_watershed( const volume_ptr<ID>& seg_ptr,
 
     counts.swap(new_counts);
 
-    std::cout << "New count: " << counts.size() << std::endl;
+    std::cout << "Done with region watershed, total: " << counts.size() << std::endl;
 
     std::cout << "Done with updating the region graph, size: "
               << rg.size() << std::endl;
@@ -460,7 +670,7 @@ inline void merge_segments_with_function( const volume_ptr<ID>& seg_ptr,
       seg_ptr = labels of each vertex
       rg_ptr = region graph, containing (edge weight, label 1, label 2)
       counts = size of each segment
-      lowl = T_e
+      lowt = min size for segments, after merge
     Outputs:
       None, but seg_ptr and rg_ptr are updated.
     */
@@ -483,7 +693,7 @@ inline void merge_segments_with_function( const volume_ptr<ID>& seg_ptr,
         ID s1 = sets.find_set(std::get<1>(it));
         ID s2 = sets.find_set(std::get<2>(it));
 
-        // Merge if the either segment's size < 'size'
+        // Merge if either segment's size < 'size'
         if ( s1 != s2 && s1 && s2 )
             if ( (counts[s1] < size) || (counts[s2] < size) )
             {
@@ -536,6 +746,7 @@ inline void merge_segments_with_function( const volume_ptr<ID>& seg_ptr,
 
     std::size_t low = static_cast<std::size_t>(lowt);
 
+    // Discard all elements with size smaller than `low`
     for ( ID id = 0; id < counts.size(); ++id )
     {
         ID s = sets.find_set(id);
@@ -589,207 +800,6 @@ inline void merge_segments_with_function( const volume_ptr<ID>& seg_ptr,
 }
 
 
-template< typename ID, typename F, typename L, typename H >
-inline std::pair<volume_ptr<ID>, ID>
-simple_watershed( const affinity_graph_ptr<F>& aff_ptr,
-                  const L& lowv,
-                  const H& highv,
-                  std::vector<std::size_t>& counts )
-{
-    /*
-    Perform watershed as defined by Algorithm 1 in Cousty 2009.
-
-    Input:
-      aff_ptr = affinity graph of edge weights
-      lowv = T_l
-      highv = T_h
-      counts = empty.  will fill with size of each segment
-    Output:
-      pair (vertex labels, # labels)
-      Note that `counts` is also updated.
-    */
-
-    typedef F float_type;
-    typedef watershed_traits<ID> traits;
-
-    float_type low  = static_cast<float_type>(lowv);
-    float_type high = static_cast<float_type>(highv);
-
-    std::ptrdiff_t xdim = aff_ptr->shape()[0];
-    std::ptrdiff_t ydim = aff_ptr->shape()[1];
-    std::ptrdiff_t zdim = aff_ptr->shape()[2];
-
-    std::ptrdiff_t size = xdim * ydim * zdim;
-
-    volume_ptr<ID> seg_ptr( new volume<ID>(boost::extents[xdim][ydim][zdim],
-                                           boost::fortran_storage_order()));
-    affinity_graph<F>& aff = *aff_ptr;
-    volume<ID>&        seg = *seg_ptr;
-
-    ID* seg_raw = seg_ptr->data();
-
-    // for each vertex, find which direction the stream is going
-    for ( std::ptrdiff_t z = 0; z < zdim; ++z )
-        for ( std::ptrdiff_t y = 0; y < ydim; ++y )
-            for ( std::ptrdiff_t x = 0; x < xdim; ++x )
-            {
-                ID& id = seg[x][y][z] = 0;
-
-                F negx = (x>0) ? aff[x][y][z][0] : low;
-                F negy = (y>0) ? aff[x][y][z][1] : low;
-                F negz = (z>0) ? aff[x][y][z][2] : low;
-                F posx = (x<(xdim-1)) ? aff[x+1][y][z][0] : low;
-                F posy = (y<(ydim-1)) ? aff[x][y+1][z][1] : low;
-                F posz = (z<(zdim-1)) ? aff[x][y][z+1][2] : low;
-
-                F m = std::max({negx,negy,negz,posx,posy,posz});
-
-                // Don't follow the edge if it's less than low (T_l)
-                if ( m > low )
-                {
-                    if ( negx == m || negx >= high ) { id |= 0x01; }
-                    if ( negy == m || negy >= high ) { id |= 0x02; }
-                    if ( negz == m || negz >= high ) { id |= 0x04; }
-                    if ( posx == m || posx >= high ) { id |= 0x08; }
-                    if ( posy == m || posy >= high ) { id |= 0x10; }
-                    if ( posz == m || posz >= high ) { id |= 0x20; }
-                }
-            }
-
-
-    const std::ptrdiff_t dir[6] = { -1, -xdim, -xdim*ydim, 1, xdim, xdim*ydim };
-    const ID dirmask[6]  = { 0x01, 0x02, 0x04, 0x08, 0x10, 0x20 };
-    const ID idirmask[6] = { 0x08, 0x10, 0x20, 0x01, 0x02, 0x04 };
-
-    // get plato escapers
-
-    std::vector<std::ptrdiff_t> bfs;
-
-    for ( std::ptrdiff_t idx = 0; idx < size; ++idx )
-    {
-        for ( std::ptrdiff_t d = 0; d < 6; ++d )
-        {
-            if ( seg_raw[idx] & dirmask[d] )
-            {
-                if ( !(seg_raw[idx+dir[d]] & idirmask[d]) )
-                {
-                    seg_raw[idx] |= 0x40;
-                    bfs.push_back(idx);
-                    d = 6; // break;
-                }
-            }
-        }
-    }
-
-    std::size_t bfs_index = 0;
-
-    while ( bfs_index < bfs.size() )
-    {
-        std::ptrdiff_t idx = bfs[bfs_index];
-
-        ID to_set = 0;
-
-        for ( std::ptrdiff_t d = 0; d < 6; ++d )
-        {
-            if ( seg_raw[idx] & dirmask[d] )
-            {
-                if ( seg_raw[idx+dir[d]] & idirmask[d] )
-                {
-                    if ( !( seg_raw[idx+dir[d]] & 0x40 ) )
-                    {
-                        bfs.push_back(idx+dir[d]);
-                        seg_raw[idx+dir[d]] |= 0x40;
-                    }
-                }
-                else
-                {
-                    to_set = dirmask[d];
-                }
-            }
-        }
-        seg_raw[idx] = to_set;
-        ++bfs_index;
-    }
-
-    bfs.clear();
-
-    //std::vector<std::size_t> counts({0});
-
-    counts.resize(1);
-    counts[0] = 0;
-
-    ID next_id = static_cast<ID>(1);
-
-    for ( std::ptrdiff_t idx = 0; idx < size; ++idx )
-    {
-        if ( seg_raw[idx] == 0 )
-        {
-            seg_raw[idx] |= traits::high_bit;
-            ++counts[0];
-        }
-
-        if ( !( seg_raw[idx] & traits::high_bit ) && seg_raw[idx] )
-        {
-            bfs.push_back(idx);
-            bfs_index = 0;
-            seg_raw[idx] |= 0x40;
-
-            while ( bfs_index < bfs.size() )
-            {
-                std::ptrdiff_t me = bfs[bfs_index];
-
-                for ( std::ptrdiff_t d = 0; d < 6; ++d )
-                {
-                    if ( seg_raw[me] & dirmask[d] )
-                    {
-                        std::ptrdiff_t him = me + dir[d];
-                        if ( seg_raw[him] & traits::high_bit )
-                        {
-                            counts[ seg_raw[him] & ~traits::high_bit ]
-                                += bfs.size();
-
-                            for ( auto& it: bfs )
-                            {
-                                seg_raw[it] = seg_raw[him];
-                            }
-
-                            bfs.clear();
-                            d = 6; // break
-                        }
-                        else if ( !( seg_raw[him] & 0x40 ) )
-                        {
-                            seg_raw[him] |= 0x40;
-                            bfs.push_back( him );
-
-                        }
-                    }
-                }
-                ++bfs_index;
-            }
-
-            if ( bfs.size() )
-            {
-                counts.push_back( bfs.size() );
-                for ( auto& it: bfs )
-                {
-                    seg_raw[it] = traits::high_bit | next_id;
-                }
-                ++next_id;
-                bfs.clear();
-            }
-        }
-    }
-
-    std::cout << "found: " << (next_id-1) << " components\n";
-
-    for ( std::ptrdiff_t idx = 0; idx < size; ++idx )
-    {
-        seg_raw[idx] &= traits::mask;
-    }
-
-    return std::make_pair(seg_ptr, next_id-1);
-}
-
 template< typename T >
 affinity_graph_ptr<T> mult_aff( const affinity_graph_ptr<T>& aff, int n )
 {
@@ -833,6 +843,7 @@ std::size_t limit_fn_avg( float v )
 {
     // size threshold based on affinity
     if ( v > 1 )
+        printf("Bad v: %f", v);
         return 2000;
 
     if ( v < 0.5 )
@@ -848,6 +859,7 @@ std::size_t limit_fn_bup( float v )
 {
     // size threshold based on affinity
     if ( v > 1 )
+        printf("Bad v: %f", v);
         return 2000;
 
     if ( v < 0.5 )
@@ -862,39 +874,52 @@ std::size_t limit_fn_bup( float v )
 
 int main( int argc, char *argv[] )
 {
+    /*
+    Accepts argument `infile`.
+        Path to input affinity graph.
+    Accepts argument `infile_size`.
+        Dimensions of infile, as 1 side of a cube.
+    Accepts argument `type`.
+        ALL: CC w/ T_h=0.99, then WS w/ T_l=0.3
+        0: (nothing else)
+        1: just_watershed_avg (+merge pairs w/ size > limit_fn_avg(avg edge))
+        2: just_watershed_bup (+merge pairs w/ size > limig_fn_bup(max edge))
+        3: just_watershed (+merge pairs w/ max edge > 0.1)
+    */
 
-    // Detect if just_watershed (0), just_watershed_avg (1), or just_watershed_bup (2)
-    if (argc < 2)
-        throw 1;
-    int type = int(argv[1]);
-    if (type > 2 || type < 0)
-        throw 1;
+    if (argc < 4)
+        throw std::invalid_argument( "insufficient arguments" );
+
+    // Detect input file.
+    char* infile = argv[1];
+    int infile_size = std::stoi(argv[2]);
+    // Detect type.
+    int type = std::stoi(argv[3]);
+    if (type > 3 || type < 0)
+        throw std::invalid_argument( "invalid argument" );
 
 
-    //auto start = std::chrono::system_clock::now();
+    auto start = std::chrono::system_clock::now();
+    auto start_master = start;
+    typedef std::chrono::duration<int> seconds_type;
 
 
     //std::cout << std::hex << watershed_traits<uint32_t>::high_bit << std::endl;
 
     affinity_graph_ptr<float> aff;
-    if (type == 0)
-        aff = read_affinity_graph_from_file<float>("../../data/ws_test_160.raw", 160, 160, 160);
-    else
-        aff = read_affinity_graph_from_file<float>("../../data/ws_test_250.raw", 250, 250, 250);
+    aff = read_affinity_graph_from_file<float>(infile, infile_size, infile_size, infile_size);
 
-    //std::cout << (std::chrono::system_clock::now() - start)
-    //          << " data loaded" << std::endl;
+    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now() - start).count() << "ms: "
+            << "data loaded" << std::endl;
+    start = std::chrono::system_clock::now();
 
 
     //std::fill_n(aff->data(), 160*160*160*3, 0);
-
     // (*aff)[10][10][10][0] = 0.5;
     // (*aff)[10][10][150][0] = 0.5;
     // (*aff)[10][100][100][0] = 0.5;
-
-
     //aff = mult_aff(aff, 3);
-
     //std::cout << "Multiplied" << std::endl;
 
 
@@ -905,9 +930,14 @@ int main( int argc, char *argv[] )
     auto seg = simple_watershed<uint32_t>(aff, 0.3, 0.99, counts);
 
 
-    //std::cout << (std::chrono::system_clock::now() - start)
-    //          << " simple ws done" << std::endl;
+    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now() - start).count() << "ms: "
+            << "simple ws done" << std::endl;
+    start = std::chrono::system_clock::now();
 
+
+    if (type > 0)
+    {
 
     // Pass (affinity graph, vertex labels, # labels) into get_region_graph
     // Receive a region graph that is a list of (weight of max edge, label 1, label 2)
@@ -915,48 +945,39 @@ int main( int argc, char *argv[] )
     auto rg = get_region_graph<uint32_t,float>(aff, seg.first, seg.second, type);
 
 
-    //std::cout << (std::chrono::system_clock::now() - start)
-    //          << " region graph created" << std::endl;
+    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now() - start).count() << "ms: "
+            << "region graph created" << std::endl;
+    start = std::chrono::system_clock::now();
 
 
-    if (type == 0)
+    if (type == 1)
     {
-        //XXX: why increasing T_e?  The multiple calls to yet_another_watershed
-        //  seem useless since all edges in rg >= T_e are checked in each call,
-        //  and no edges are added when rg is updated.
+        merge_segments_with_function(seg.first, rg, counts, limit_fn_avg, 25);
+    }
+    else if (type == 2)
+    {
+        merge_segments_with_function(seg.first, rg, counts, limit_fn_bup, 25);
+    }
+    else if (type == 3)
+    {
         // Note that the segment size threshold T_s isn't implemented here.
         yet_another_watershed(seg.first, rg, counts, 0.1);
-        //yet_another_watershed(seg.first, rg, counts, 0.2);
-        //yet_another_watershed(seg.first, rg, counts, 0.3);
-        //yet_another_watershed(seg.first, rg, counts, 0.4);
-
-        //merge_segments_with_function(seg.first, rg, counts, limit_fn, 25);
-    }
-    else
-    {
-        //XXX: rules useless? I think these are used for merge_segments(..., thold, ...),
-        // which is no longer used?
-        /*
-        std::list<std::pair<std::size_t, float>> rules;
-        rules.emplace_back(1500,0.98);
-        rules.emplace_back(500,0.95);
-        rules.emplace_back(250,0.91);
-        rules.emplace_back(100,0.89);
-        rules.emplace_back(25,0.0);
-        */
-
-        if (type == 1)
-            merge_segments_with_function(seg.first, rg, counts, limit_fn_avg, 25);
-        else
-            merge_segments_with_function(seg.first, rg, counts, limit_fn_bup, 25);
     }
 
-    //std::cout << (std::chrono::system_clock::now() - start)
-    //          << " segments merged" << std::endl;
+    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now() - start).count() << "ms: "
+            << "region segments watersheded/merged" << std::endl;
+
+    }
 
 
-    std::cout << "finished, now outputting..." << std::endl;
+    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now() - start_master).count() << "ms total: "
+            << "finished, now outputting..." << std::endl;
 
-    write_volume_to_file("vout.out", seg.first);
+    char outfile[100];
+    sprintf(outfile, "aleks-%d-%d.out", infile_size, type);
+    write_volume_to_file(outfile, seg.first);
 
 }
