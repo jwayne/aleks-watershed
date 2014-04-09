@@ -22,10 +22,14 @@ bin/watershed [INPUT_FILE] [XSIZE] [YSIZE] [ZSIZE] [TYPE]
 * XSIZE
 * YSIZE
 * ZSIZE
-* TYPE: Type of watershed algorithm to run.  See comments in zi/watershed/watershed.cpp for details.
+* TYPE: Type of watershed algorithm to run.  All algorithms first run connected components with threshold T_h=.99, and then watershed to expand the seeds up to T_l=0.3.  Then, the types diverge:
+  * 0: nothing else
+  * 1: merge pairs of neighboring segments where some segment has size < watershed::limit_fn_avg(avg edge weight among edges straddling that pair of segments) [this does exactly what zi/watershed/just_watershed_avg.cpp does]
+  * 2: merge pairs of neighboring segments where some segment has size < watershed::limit_fn_bup(max edge weight among edges straddling that pair of segments) [this does exactly what zi/watershed/just_watershed_bup.cpp does]
+  * 3: merge pairs of neighboring segments where the max edge weight among edges straddling that pair of segments > 0.1 [this does exactly what zi/watershed/just_watershed.cpp does]
+  * Note that the algorithm in Aleks' 2011 master's thesis (merge pairs of neighboring segments where some segment has size < T_s and the max straddling edge > T_e) is not available through this code.  However, types 1-2 are intended to be updates of that algorithm.  Furthermore, that algorithm was not available in this package before I modified it either.  That said, if desired, this should be easy to implement.
 
-Once compiled and executed, the results can be viewed in MATLAB with the
-following commands:
+Once compiled and executed, the results can be viewed using my other package [https://github.com/jwayne/iw-seung].  Alternatively, the results can be viewed in MATLAB with the following commands:
 
 ```
 f = fopen('./aleks-160-0.out', 'r');

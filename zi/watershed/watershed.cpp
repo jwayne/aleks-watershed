@@ -867,11 +867,7 @@ int main( int argc, char *argv[] )
     Accepts 3 arguments `xsize` `ysize` `zsize`.
         Dimensions of infile.
     Accepts argument `type`.
-        ALL: CC w/ T_h=0.99, then WS w/ T_l=0.3
-        0: (nothing else)
-        1: just_watershed_avg (+merge pairs w/ size > limit_fn_avg(avg edge))
-        2: just_watershed_bup (+merge pairs w/ size > limig_fn_bup(max edge))
-        3: just_watershed (+merge pairs w/ max edge > 0.1)
+        0-3 numeric.  See README.md for instructions.
     */
 
     if (argc < 6)
