@@ -864,8 +864,8 @@ int main( int argc, char *argv[] )
     /*
     Accepts argument `infile`.
         Path to input affinity graph.
-    Accepts argument `infile_size`.
-        Dimensions of infile, as 1 side of a cube.
+    Accepts 3 arguments `xsize` `ysize` `zsize`.
+        Dimensions of infile.
     Accepts argument `type`.
         ALL: CC w/ T_h=0.99, then WS w/ T_l=0.3
         0: (nothing else)
@@ -874,14 +874,16 @@ int main( int argc, char *argv[] )
         3: just_watershed (+merge pairs w/ max edge > 0.1)
     */
 
-    if (argc < 4)
+    if (argc < 6)
         throw std::invalid_argument( "insufficient arguments" );
 
     // Detect input file.
     char* infile = argv[1];
-    int infile_size = std::stoi(argv[2]);
+    int xsize = std::stoi(argv[2]);
+    int ysize = std::stoi(argv[3]);
+    int zsize = std::stoi(argv[4]);
     // Detect type.
-    int type = std::stoi(argv[3]);
+    int type = std::stoi(argv[5]);
     if (type > 3 || type < 0)
         throw std::invalid_argument( "invalid argument" );
 
@@ -894,13 +896,16 @@ int main( int argc, char *argv[] )
     //std::cout << std::hex << watershed_traits<uint32_t>::high_bit << std::endl;
 
     affinity_graph_ptr<float> aff;
-    aff = read_affinity_graph_from_file<float>(infile, infile_size, infile_size, infile_size);
+    aff = read_affinity_graph_from_file<float>(infile, xsize, ysize, zsize);
 
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now() - start).count() << "ms: "
             << "data loaded" << std::endl;
     start = std::chrono::system_clock::now();
 
+
+//    printf("%f %f %f\n", (*aff)[1023][5][5][0], (*aff)[1023][5][5][1], (*aff)[1023][5][5][2]);
+//    throw 1;
 
     //std::fill_n(aff->data(), 160*160*160*3, 0);
     // (*aff)[10][10][10][0] = 0.5;
@@ -964,7 +969,7 @@ int main( int argc, char *argv[] )
             << "finished, now outputting..." << std::endl;
 
     char outfile[100];
-    sprintf(outfile, "aleks-%d-%d.out", infile_size, type);
+    sprintf(outfile, "aleks-%d_%d_%d-%d.out", xsize, ysize, zsize, type);
     write_volume_to_file(outfile, seg.first);
 
 }

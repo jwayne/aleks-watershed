@@ -16,10 +16,12 @@ g++-4.7 -Wall -std=c++0x zi/watershed/watershed.cpp -I/usr/local/lib/boost -I. -
 
 Execute via:
 ```
-bin/watershed [INPUT_FILE] [INPUT_FILE_DIMENSIONS] [TYPE]
+bin/watershed [INPUT_FILE] [XSIZE] [YSIZE] [ZSIZE] [TYPE]
 ```
 * INPUT_FILE: Affinity graph as a raw binary file of floats.  Example files can be downloaded at [http://microglia.mit.edu/data/].
-* INPUT_FILE_DIMENSIONS: Dimensions of the affinity graph, assuming a cube.
+* XSIZE
+* YSIZE
+* ZSIZE
 * TYPE: Type of watershed algorithm to run.  See comments in zi/watershed/watershed.cpp for details.
 
 Once compiled and executed, the results can be viewed in MATLAB with the
