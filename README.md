@@ -11,7 +11,7 @@ Get the dependencies:
 
 Compile via:
 ```
-g++-4.7 -Wall -std=c++0x zi/watershed/watershed.cpp -I/usr/local/lib/boost -I. -o bin/watershed
+g++-4.7 -Wall -std=c++0x zi/watershed/watershed.cpp -I/usr/local/lib/boost -I. -O2 -DNDEBUG -o bin/watershed
 ```
 
 Execute via:
